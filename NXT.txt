@@ -1,0 +1,24 @@
+Gaps before a public web/app
+
+A. Toggle Button:
+1. Inter-city - so that backend will be twaeaked based on that, longitude/latitude should be having difference of 20-30 km
+2. Intra-city - difference should be within 1km (i.e or may configurable to adjust)
+
+B. Product
+
+Rider flow: enter pickup/drop (map), see ranked rides, request/confirm a seat.
+Driver flow: publish a route, seats, departure time.
+Booking: reserve seat, cancel, conflict if two people book the last seat.
+Time: match only trips that leave in a useful window (POC ignores time except as a label). Naveen : Day should be sufficient initially
+Trust/safety: accounts, phone/email verify, ratings — expected for ride sharing.
+
+
+Target audience while publishing colleges/schools:
+
+Naveen: target schools/colleges near by locals
+Naveen/Chhayank : JECRC
+Other Market thoughts
+
+
+
+
