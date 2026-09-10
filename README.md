@@ -6,6 +6,7 @@ Files details:
 route_db.json: It is a file of dummy records in the json format. Our engine will run against this records to see if your patch is present in it or not.
 
 search_engine.js: It is our main file that will take the pickup and drop coordinates, use the turf library to get the matching route. right now we can change the pickup and drop coordinates and add a record in the routes_db.json to test the file.
+<img width="648" height="285" alt="image" src="https://github.com/user-attachments/assets/79aa4320-5106-4583-8020-c883a0e81518" />
 
 ## Prerequisites
 
