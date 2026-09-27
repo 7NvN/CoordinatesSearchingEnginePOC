@@ -7,6 +7,17 @@ const HYD = { lng: 78.36, lat: 17.44 };
 const DEFAULT_PICKUP = { lng: 78.34588, lat: 17.450918 };
 const DEFAULT_DROP = { lng: 78.3691652, lat: 17.4342597 };
 
+function toLocalInput(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function roundedDate(minutesFromNow) {
+  const date = new Date(Date.now() + minutesFromNow * 60_000);
+  date.setMinutes(date.getMinutes() - (date.getMinutes() % 5), 0, 0);
+  return date;
+}
+
 function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -24,6 +35,8 @@ export default function App() {
   const [tab, setTab] = useState('search');
   const [role, setRole] = useState('rider');
   const [walk, setWalk] = useState(500);
+  const [departAfter, setDepartAfter] = useState(() => toLocalInput(roundedDate(0)));
+  const [departBefore, setDepartBefore] = useState(() => toLocalInput(roundedDate(180)));
   const [pickup, setPickup] = useState(DEFAULT_PICKUP);
   const [drop, setDrop] = useState(DEFAULT_DROP);
   const [clickTarget, setClickTarget] = useState('pickup');
@@ -36,11 +49,7 @@ export default function App() {
   const [dest, setDest] = useState({ lng: 78.348, lat: 17.44 });
   const [seats, setSeats] = useState(2);
   const [routeName, setRouteName] = useState('Office hop');
-  const [departureAt, setDepartureAt] = useState(() => {
-    const d = new Date(Date.now() + 45 * 60 * 1000);
-    d.setMinutes(d.getMinutes() - (d.getMinutes() % 5), 0, 0);
-    return d.toISOString().slice(0, 16);
-  });
+  const [departureAt, setDepartureAt] = useState(() => toLocalInput(roundedDate(45)));
   const [preview, setPreview] = useState(null);
   const [bookings, setBookings] = useState([]);
 
@@ -142,7 +151,13 @@ export default function App() {
     try {
       const data = await api('/v1/search', {
         method: 'POST',
-        body: { pickup, drop, maxWalkMeters: Number(walk) },
+        body: {
+          pickup,
+          drop,
+          maxWalkMeters: Number(walk),
+          departAfter: departAfter ? new Date(departAfter).toISOString() : undefined,
+          departBefore: departBefore ? new Date(departBefore).toISOString() : undefined,
+        },
       });
       setMatches(data.matches || []);
       setSelected(data.matches?.[0] || null);
@@ -277,6 +292,16 @@ export default function App() {
               Pickup walk cap: {walk} m
               <input type="range" min="200" max="1000" step="50" value={walk} onChange={(e) => setWalk(e.target.value)} />
             </label>
+            <div className="time-window">
+              <label>
+                Depart after
+                <input type="datetime-local" value={departAfter} onChange={(e) => setDepartAfter(e.target.value)} />
+              </label>
+              <label>
+                Depart before
+                <input type="datetime-local" value={departBefore} onChange={(e) => setDepartBefore(e.target.value)} />
+              </label>
+            </div>
             <div className="coords">
               <button type="button" onClick={() => setClickTarget('pickup')}>Pickup {pickup.lat.toFixed(4)}, {pickup.lng.toFixed(4)}</button>
               <button type="button" onClick={() => setClickTarget('drop')}>Drop {drop.lat.toFixed(4)}, {drop.lng.toFixed(4)}</button>

@@ -6,26 +6,37 @@
     "start": "node --use-system-ca src/server.js",
     "dev": "node --use-system-ca src/server.js",
     "web": "npm run dev --prefix web",
-    "test": "node --test tests/matcher.test.js",
+    "db:reset": "node --use-system-ca src/reset-db.js",
+    "test": "node --test tests/*.test.js",
+    "test:unit": "node --test tests/matcher.test.js",
+    "test:api": "node --test tests/api.test.js",
+    "test:e2e": "cross-env DB_PATH=./data/e2e.sqlite npm run db:reset && playwright test",
+    "build": "npm run build --prefix web",
     "poc:search": "node search_engine.js",
     "poc:route": "node get_route.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ChhayankS-tech/CoordinatesSearchingEnginePOC.git"
+    "url": "git+https://github.com/7NvN/CoordinatesSearchingEnginePOC.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/ChhayankS-tech/CoordinatesSearchingEnginePOC/issues"
+    "url": "https://github.com/7NvN/CoordinatesSearchingEnginePOC/issues"
   },
-  "homepage": "https://github.com/ChhayankS-tech/CoordinatesSearchingEnginePOC#readme",
+  "homepage": "https://github.com/7NvN/CoordinatesSearchingEnginePOC#readme",
   "description": "Carpool route matching demo: Turf matcher, Express API, SQLite, MapLibre UI",
   "dependencies": {
     "@turf/turf": "^7.4.0",
     "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.1",
+    "cross-env": "^10.0.0",
+    "supertest": "^7.1.4"
   }
 }

@@ -13,29 +13,36 @@ Node 18+ recommended.
 
 ```bash
 npm install
+npm install --prefix web
 npm test
+npm run build
+npm run db:reset
 npm run dev
 ```
 
 In a second terminal:
 
 ```bash
-npm install --prefix web
 npm run web
 ```
 
-- API: http://localhost:3001/health
+- API liveness: http://localhost:3001/health
+- API readiness (SQLite + OSRM): http://localhost:3001/ready
 - UI: http://localhost:5173
 
-The first API start takes Hyderabad origin/destination pairs from `routes_db.json`
-(ROUTE_003–005) and **rebuilds each path with OSRM driving directions**. Dummy
-LineStrings are never stored. Publish also always calls OSRM; the UI cannot upload
-a custom geometry.
+`npm run db:reset` deletes the local demo database, reads deterministic Hyderabad
+origin/destination pairs from `data/seed-trips.json`, and **rebuilds every path with
+OSRM driving directions**. Dummy LineStrings are never stored. Publish also always
+calls OSRM; the UI cannot upload a custom geometry.
+
+The reset is intentionally destructive to local demo trips/bookings. Stop the API
+before running it. Automated browser tests use `data/e2e.sqlite`, not your normal DB.
 
 ## Demo flow
 
-1. Open the UI. Default pins are near Divyasree Orion → Gachibowli.
-2. Click **Search rides**. Select a result to draw the driver path and board/alight points.
+1. Open the UI. Default pins and the three-hour departure window cover the seeded
+   Divyasree Orion → Gachibowli trip.
+2. Click **Search rides**. Select a result to draw the OSRM path and board/alight points.
 3. **Book seat** (as Rider). Seats decrement atomically.
 4. Switch to **Driver**, set origin/destination on the map, **Preview path** (OSRM), **Publish trip**.
 5. **Bookings** lists rider bookings; **Cancel** restores the seat.
@@ -46,7 +53,8 @@ Map clicks alternate pickup/drop (search) or origin/destination (publish).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/health` | API + OSRM status |
+| GET | `/health` | Process liveness |
+| GET | `/ready` | SQLite + OSRM readiness (`503` when unavailable) |
 | POST | `/v1/search` | Rank matching published trips |
 | POST | `/v1/routes/preview` | OSRM LineString (cached ~100 m grid) |
 | POST | `/v1/trips` | Publish a trip |
@@ -60,7 +68,9 @@ Search body:
 {
   "pickup": { "lng": 78.34588, "lat": 17.450918 },
   "drop": { "lng": 78.3691652, "lat": 17.4342597 },
-  "maxWalkMeters": 500
+  "maxWalkMeters": 500,
+  "departAfter": "2026-09-27T08:30:00.000Z",
+  "departBefore": "2026-09-27T11:30:00.000Z"
 }
 ```
 
@@ -77,12 +87,22 @@ npm run poc:route
 
 ## Config
 
-Copy `.env.example` if you need to change `PORT`, `OSRM_BASE_URL`, `DB_PATH`, or `CORS_ORIGIN`.
+Copy `.env.example` to `.env` to change `PORT`, `OSRM_BASE_URL`,
+`OSRM_TIMEOUT_MS`, `DB_PATH`, or `CORS_ORIGIN`. The API loads it on startup.
 The public OSRM driving API is the only source of trip LineStrings.
 
 On Windows networks that intercept HTTPS, start the API with the official Node
 `--use-system-ca` flag (already in `npm run dev`) so the corporate CA is trusted.
 Do not disable TLS.
+
+## Readiness checks
+
+```bash
+npm test          # 13 matcher + API integration tests
+npm run build     # production web build
+npx playwright install chromium  # one-time browser setup
+npm run test:e2e  # isolated OSRM seed + Chromium search/book/cancel flow
+```
 
 ## Layout
 
@@ -90,7 +110,8 @@ Do not disable TLS.
 src/matcher.js    ranking (walk, direction, seats, time, bbox)
 src/osrm.js       driving path + cache
 src/db.js         SQLite schema, seed, bookings
+src/reset-db.js   explicit deterministic demo reset
 src/server.js     Express /v1 API
 web/              Vite + React + MapLibre
-tests/            matcher unit tests
+tests/            matcher, API integration, Playwright browser flow
 ```

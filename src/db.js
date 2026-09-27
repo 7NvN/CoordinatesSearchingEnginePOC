@@ -3,33 +3,9 @@ const path = require('path');
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 
-const HYD_LNG_MIN = 77.5;
-const HYD_LNG_MAX = 79.0;
-const HYD_LAT_MIN = 16.5;
-const HYD_LAT_MAX = 18.5;
-
-function isHyderabadRoute(route) {
-  const first = route.geometry?.coordinates?.[0];
-  if (!first) return false;
-  const [lng, lat] = first;
-  return lng >= HYD_LNG_MIN && lng <= HYD_LNG_MAX && lat >= HYD_LAT_MIN && lat <= HYD_LAT_MAX;
-}
-
-function parseClockToToday(clockText) {
-  const match = String(clockText || '').trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  const now = new Date();
-  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0);
-  if (!match) return date.toISOString();
-  let hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  const ampm = match[3].toUpperCase();
-  if (ampm === 'PM' && hours < 12) hours += 12;
-  if (ampm === 'AM' && hours === 12) hours = 0;
-  date.setHours(hours, minutes, 0, 0);
-  if (date.getTime() < now.getTime() - 60 * 60 * 1000) {
-    date.setDate(date.getDate() + 1);
-  }
-  return date.toISOString();
+function departureFromNow(minutes) {
+  const safeMinutes = Number.isFinite(Number(minutes)) ? Number(minutes) : 45;
+  return new Date(Date.now() + safeMinutes * 60 * 1000).toISOString();
 }
 
 function openDb(dbPath) {
@@ -101,7 +77,7 @@ function ensureBaseRecords(db) {
   ).run('v_demo', 'u_driver', 'Demo Hatchback', 3);
 }
 
-async function seedIfEmpty(db, routesDbPath, getRouteLineString) {
+async function seedIfEmpty(db, seedTripsPath, getRouteLineString) {
   ensureBaseRecords(db);
   const count = db.prepare('SELECT COUNT(*) AS n FROM trips').get().n;
   if (count > 0) return;
@@ -110,8 +86,7 @@ async function seedIfEmpty(db, routesDbPath, getRouteLineString) {
     throw new Error('Cannot seed trips without an OSRM route function');
   }
 
-  const raw = JSON.parse(fs.readFileSync(routesDbPath, 'utf8'));
-  const hydRoutes = raw.filter(isHyderabadRoute);
+  const seedTrips = JSON.parse(fs.readFileSync(seedTripsPath, 'utf8'));
   const insertTrip = db.prepare(`
     INSERT INTO trips (
       id, driver_id, vehicle_id, driver_name, route_name, vehicle_label,
@@ -123,48 +98,54 @@ async function seedIfEmpty(db, routesDbPath, getRouteLineString) {
     'INSERT INTO trip_geometry (trip_id, geojson, distance_m, duration_s) VALUES (?, ?, ?, ?)'
   );
 
-  let seeded = 0;
-  for (const [index, route] of hydRoutes.entries()) {
-    const coords = route.geometry.coordinates;
-    const origin = coords[0];
-    const dest = coords[coords.length - 1];
-    const tripId = route.routeId || `seed_${index + 1}`;
+  const preparedTrips = [];
+  for (const [index, trip] of seedTrips.entries()) {
+    const origin = trip.origin;
+    const destination = trip.destination;
+    const tripId = trip.id || `DEMO_${index + 1}`;
     const preview = await getRouteLineString(
-      { lng: origin[0], lat: origin[1] },
-      { lng: dest[0], lat: dest[1] }
+      origin,
+      destination
     );
     if (!preview.success) {
-      console.warn(`Skipping ${tripId}: OSRM could not build a driving route (${preview.error})`);
-      continue;
+      throw new Error(
+        `Seed aborted: OSRM could not build authentic route ${tripId} (${preview.error})`
+      );
     }
-    insertTrip.run(
-      tripId,
-      'u_driver',
-      'v_demo',
-      route.driverName,
-      route.routeName,
-      route.vehicle,
-      origin[0],
-      origin[1],
-      dest[0],
-      dest[1],
-      parseClockToToday(route.departureTime),
-      route.availableSeats,
-      route.availableSeats
-    );
-    insertGeom.run(
-      tripId,
-      JSON.stringify(preview.lineString),
-      preview.distanceM ?? null,
-      preview.durationS ?? null
-    );
-    seeded += 1;
+    preparedTrips.push({ tripId, trip, origin, destination, preview });
   }
 
-  if (seeded === 0) {
+  if (preparedTrips.length === 0) {
     throw new Error('No trips seeded: OSRM did not return any authentic driving routes');
   }
-  console.log(`Seeded ${seeded} Hyderabad trip(s) from OSRM driving routes`);
+
+  const insertAll = db.transaction(() => {
+    for (const { tripId, trip, origin, destination, preview } of preparedTrips) {
+      insertTrip.run(
+        tripId,
+        'u_driver',
+        'v_demo',
+        trip.driverName,
+        trip.routeName,
+        trip.vehicle,
+        origin.lng,
+        origin.lat,
+        destination.lng,
+        destination.lat,
+        departureFromNow(trip.departureMinutesFromNow),
+        trip.seats,
+        trip.seats
+      );
+      insertGeom.run(
+        tripId,
+        JSON.stringify(preview.lineString),
+        preview.distanceM ?? null,
+        preview.durationS ?? null
+      );
+    }
+  });
+  insertAll();
+  console.log(`Seeded ${preparedTrips.length} deterministic Hyderabad trip(s) from OSRM driving routes`);
 }
 
 function listSearchTrips(db) {
@@ -248,6 +229,16 @@ function createBooking(db, payload) {
   const bookingId = crypto.randomUUID();
   const createdAt = new Date().toISOString();
   const tx = db.transaction(() => {
+    const existing = db.prepare(`
+      SELECT id FROM bookings
+      WHERE trip_id = ? AND rider_id = ? AND status = 'confirmed'
+    `).get(payload.tripId, payload.riderId);
+    if (existing) {
+      const error = new Error('Rider already has a confirmed booking on this trip');
+      error.statusCode = 409;
+      throw error;
+    }
+
     const updated = db.prepare(`
       UPDATE trips
       SET seats_left = seats_left - 1,

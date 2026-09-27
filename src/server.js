@@ -1,4 +1,5 @@
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 const express = require('express');
 const cors = require('cors');
 const { assertLngLat, clampWalkMeters, toIsoOrNull } = require('./coords');
@@ -24,9 +25,11 @@ function rateLimit(max, windowMs) {
 
 async function createApp(options = {}) {
   const dbPath = options.dbPath || process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.sqlite');
-  const routesDbPath = options.routesDbPath || path.join(__dirname, '..', 'routes_db.json');
+  const seedTripsPath = options.seedTripsPath || path.join(__dirname, '..', 'data', 'seed-trips.json');
+  const routeProvider = options.routeProvider || getRouteLineString;
+  const readinessProvider = options.readinessProvider || checkOsrmHealth;
   const db = dbApi.openDb(dbPath);
-  await dbApi.seedIfEmpty(db, routesDbPath, getRouteLineString);
+  await dbApi.seedIfEmpty(db, seedTripsPath, routeProvider);
 
   const app = express();
   const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
@@ -39,10 +42,15 @@ async function createApp(options = {}) {
     next();
   });
 
-  app.get('/health', async (_req, res) => {
-    const osrm = await checkOsrmHealth();
-    res.json({
-      ok: true,
+  app.get('/health', (_req, res) => {
+    res.json({ ok: true, service: 'carpool-api' });
+  });
+
+  app.get('/ready', async (_req, res) => {
+    const osrm = await readinessProvider();
+    const ready = Boolean(osrm.ok);
+    res.status(ready ? 200 : 503).json({
+      ready,
       db: 'sqlite',
       osrm,
     });
@@ -64,6 +72,21 @@ async function createApp(options = {}) {
       const departAfter = toIsoOrNull(req.body?.departAfter);
       const departBefore = toIsoOrNull(req.body?.departBefore);
       const debug = Boolean(req.body?.debug);
+      if (req.body?.departAfter && !departAfter) {
+        const error = new Error('departAfter must be a valid date');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (req.body?.departBefore && !departBefore) {
+        const error = new Error('departBefore must be a valid date');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (departAfter && departBefore && departAfter >= departBefore) {
+        const error = new Error('departAfter must be before departBefore');
+        error.statusCode = 400;
+        throw error;
+      }
 
       const trips = dbApi.listSearchTrips(db).filter((trip) => trip.status === 'published' && trip.availableSeats > 0);
       const result = findMatchingRides(trips, pickup, drop, {
@@ -92,7 +115,7 @@ async function createApp(options = {}) {
       const origin = assertLngLat(req.body?.origin, 'origin');
       const destination = assertLngLat(req.body?.destination, 'destination');
       const started = Date.now();
-      const preview = await getRouteLineString(
+      const preview = await routeProvider(
         { lng: origin[0], lat: origin[1] },
         { lng: destination[0], lat: destination[1] }
       );
@@ -129,12 +152,17 @@ async function createApp(options = {}) {
         error.statusCode = 400;
         throw error;
       }
-      const departureAt = toIsoOrNull(req.body?.departureAt) || new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      const departureAt = toIsoOrNull(req.body?.departureAt);
+      if (!departureAt) {
+        const error = new Error('departureAt must be a valid date');
+        error.statusCode = 400;
+        throw error;
+      }
       const driverId = req.body?.driverId || 'u_driver';
       const users = dbApi.listUsers(db);
       const driver = users.find((u) => u.id === driverId) || { name: 'Arjun Driver' };
 
-      const preview = await getRouteLineString(
+      const preview = await routeProvider(
         { lng: origin[0], lat: origin[1] },
         { lng: destination[0], lat: destination[1] }
       );
@@ -177,6 +205,9 @@ async function createApp(options = {}) {
       const trip = dbApi.getTrip(db, req.params.id);
       if (!trip) {
         return res.status(404).json({ error: 'Trip not found' });
+      }
+      if (trip.seatsLeft <= 0 || trip.status !== 'published') {
+        return res.status(409).json({ error: 'No seats left on this trip' });
       }
       const pickup = assertLngLat(req.body?.pickup, 'pickup');
       const drop = assertLngLat(req.body?.drop, 'drop');

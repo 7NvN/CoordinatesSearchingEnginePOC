@@ -56,6 +56,20 @@ label {
   font-size: 0.9rem;
 }
 
+.time-window {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.time-window label {
+  min-width: 0;
+}
+
+.time-window input {
+  width: 100%;
+}
+
 .coords {
   display: flex;
   flex-direction: column;

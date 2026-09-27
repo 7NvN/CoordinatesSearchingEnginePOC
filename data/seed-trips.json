@@ -1,0 +1,32 @@
+[
+  {
+    "id": "DEMO_ORION_GACHIBOWLI",
+    "driverName": "Arjun Driver",
+    "routeName": "Divyasree Orion to Gachibowli",
+    "vehicle": "Demo Hatchback",
+    "seats": 3,
+    "departureMinutesFromNow": 45,
+    "origin": { "lng": 78.34588, "lat": 17.450918 },
+    "destination": { "lng": 78.3691652, "lat": 17.4342597 }
+  },
+  {
+    "id": "DEMO_HITEC_FINANCIAL",
+    "driverName": "Sneha K",
+    "routeName": "Hitec City to Financial District",
+    "vehicle": "Tata Nexon (Blue)",
+    "seats": 3,
+    "departureMinutesFromNow": 75,
+    "origin": { "lng": 78.356014, "lat": 17.450913 },
+    "destination": { "lng": 78.348882, "lat": 17.395812 }
+  },
+  {
+    "id": "DEMO_KONDAPUR_ORION",
+    "driverName": "Vikram Rao",
+    "routeName": "Kondapur to Divyasree Orion",
+    "vehicle": "Kia Seltos (Black)",
+    "seats": 2,
+    "departureMinutesFromNow": 105,
+    "origin": { "lng": 78.344802, "lat": 17.457921 },
+    "destination": { "lng": 78.37495, "lat": 17.423424 }
+  }
+]
