@@ -1,0 +1,9 @@
+{
+  "name": "Shopbook",
+  "short_name": "Shopbook",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#efe6da",
+  "theme_color": "#742220",
+  "lang": "hi"
+}
