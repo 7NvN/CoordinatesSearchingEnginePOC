@@ -25,6 +25,13 @@ function fmtTime(iso) {
   return d.toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
 }
 
+function seatsToRelease(booking, raw) {
+  const held = booking.seat_count || 1;
+  const chosen = Number(raw);
+  if (!Number.isInteger(chosen) || chosen < 1) return held;
+  return Math.min(chosen, held);
+}
+
 export default function App() {
   const mapRef = useRef(null);
   const mapObj = useRef(null);
@@ -43,7 +50,6 @@ export default function App() {
   const [matches, setMatches] = useState([]);
   const [selected, setSelected] = useState(null);
   const [tripGeom, setTripGeom] = useState(null);
-  const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [origin, setOrigin] = useState({ lng: 78.356, lat: 17.451 });
   const [dest, setDest] = useState({ lng: 78.348, lat: 17.44 });
@@ -52,6 +58,14 @@ export default function App() {
   const [departureAt, setDepartureAt] = useState(() => toLocalInput(roundedDate(45)));
   const [preview, setPreview] = useState(null);
   const [bookings, setBookings] = useState([]);
+  const [bookSeats, setBookSeats] = useState(1);
+  const [cancelCounts, setCancelCounts] = useState({});
+  const [pickupName, setPickupName] = useState('Looking up place…');
+  const [dropName, setDropName] = useState('Looking up place…');
+  const [originName, setOriginName] = useState('Looking up place…');
+  const [destName, setDestName] = useState('Looking up place…');
+  const [notice, setNotice] = useState({ seq: 0, tab: 'search', text: '' });
+  const noticeSeq = useRef(0);
 
   useEffect(() => {
     tabRef.current = tab;
@@ -145,9 +159,37 @@ export default function App() {
     });
   }, [tripGeom]);
 
-  async function search() {
+  function publishNotice(tabName, text) {
+    const seq = noticeSeq.current + 1;
+    noticeSeq.current = seq;
+    setNotice({ seq, tab: tabName, text });
+    return seq;
+  }
+
+  useEffect(() => {
+    const points = [
+      [pickup, setPickupName],
+      [drop, setDropName],
+      [origin, setOriginName],
+      [dest, setDestName],
+    ];
+    const controllers = points.map(([point, setName]) => {
+      const controller = new AbortController();
+      setName('Looking up place…');
+      fetch(`/v1/places/reverse?lng=${point.lng}&lat=${point.lat}`, { signal: controller.signal })
+        .then((response) => response.json())
+        .then((data) => setName(data.place?.name || 'Unnamed place'))
+        .catch((error) => {
+          if (error.name !== 'AbortError') setName('Unnamed place');
+        });
+      return controller;
+    });
+    return () => controllers.forEach((controller) => controller.abort());
+  }, [pickup, drop, origin, dest]);
+
+  async function search(options = {}) {
+    const seq = options.silent ? noticeSeq.current : publishNotice('search', 'Searching…');
     setBusy(true);
-    setStatus('Searching…');
     try {
       const data = await api('/v1/search', {
         method: 'POST',
@@ -159,13 +201,22 @@ export default function App() {
           departBefore: departBefore ? new Date(departBefore).toISOString() : undefined,
         },
       });
+      if (!options.silent && noticeSeq.current !== seq) return;
       setMatches(data.matches || []);
       setSelected(data.matches?.[0] || null);
-      setStatus(data.matches?.length ? `Found ${data.matches.length} ride(s)` : 'No matching driver routes');
+      if (!options.silent) {
+        setNotice({
+          seq,
+          tab: 'search',
+          text: data.matches?.length ? `Found ${data.matches.length} ride(s)` : 'No matching driver routes',
+        });
+      }
       if (data.matches?.[0]) await loadTrip(data.matches[0].tripId);
       else setTripGeom(null);
     } catch (error) {
-      setStatus(error.message);
+      if (!options.silent && noticeSeq.current === seq) {
+        setNotice({ seq, tab: 'search', text: error.message });
+      }
     } finally {
       setBusy(false);
     }
@@ -181,22 +232,28 @@ export default function App() {
     try {
       await loadTrip(match.tripId);
     } catch (error) {
-      setStatus(error.message);
+      publishNotice('search', error.message);
     }
   }
 
   async function book(match) {
+    const requested = Math.min(Math.max(1, Number(bookSeats) || 1), match.availableSeats);
+    const seq = publishNotice('bookings', 'Booking…');
     setBusy(true);
     try {
       const data = await api(`/v1/trips/${match.tripId}/bookings`, {
         method: 'POST',
-        body: { pickup, drop, maxWalkMeters: Number(walk), riderId: 'u_rider' },
+        body: { pickup, drop, maxWalkMeters: Number(walk), riderId: 'u_rider', seats: requested },
       });
-      setStatus(`Booked ${match.routeName}. Seats left: ${data.trip.seatsLeft}`);
-      await search();
+      await search({ silent: true });
       await loadBookings();
+      if (noticeSeq.current !== seq) return;
+      publishNotice(
+        'bookings',
+        `Booked ${requested} seat(s) on ${match.routeName}. Seats left: ${data.trip.seatsLeft}`
+      );
     } catch (error) {
-      setStatus(error.message);
+      if (noticeSeq.current === seq) publishNotice('bookings', error.message);
     } finally {
       setBusy(false);
     }
@@ -204,7 +261,7 @@ export default function App() {
 
   async function previewRoute() {
     setBusy(true);
-    setStatus('Fetching road path…');
+    publishNotice('publish', 'Fetching road path…');
     try {
       const data = await api('/v1/routes/preview', {
         method: 'POST',
@@ -212,9 +269,9 @@ export default function App() {
       });
       setPreview(data);
       setTripGeom(data.lineString);
-      setStatus(`Preview ${data.distanceKm} km · ${data.durationMins} min`);
+      publishNotice('publish', `Preview ${data.distanceKm} km · ${data.durationMins} min`);
     } catch (error) {
-      setStatus(error.message);
+      publishNotice('publish', error.message);
     } finally {
       setBusy(false);
     }
@@ -234,10 +291,10 @@ export default function App() {
           departureAt: new Date(departureAt).toISOString(),
         },
       });
-      setStatus(`Published ${data.trip.routeName}`);
+      publishNotice('publish', `Published ${data.trip.routeName}`);
       setTripGeom(data.trip.geometry);
     } catch (error) {
-      setStatus(error.message);
+      publishNotice('publish', error.message);
     } finally {
       setBusy(false);
     }
@@ -248,21 +305,26 @@ export default function App() {
     setBookings(data.bookings || []);
   }
 
-  async function cancelBooking(id) {
+  async function cancelBooking(id, seats) {
+    const seq = publishNotice('bookings', 'Cancelling…');
     setBusy(true);
     try {
-      await api(`/v1/bookings/${id}/cancel`, { method: 'POST' });
-      setStatus('Booking cancelled, seat restored');
+      const data = await api(`/v1/bookings/${id}/cancel`, { method: 'POST', body: { seats } });
       await loadBookings();
+      if (noticeSeq.current !== seq) return;
+      const restored = data.booking.status === 'cancelled'
+        ? 'Booking cancelled and seats restored'
+        : `Cancelled ${seats} seat(s). ${data.booking.seats} still booked`;
+      publishNotice('bookings', restored);
     } catch (error) {
-      setStatus(error.message);
+      if (noticeSeq.current === seq) publishNotice('bookings', error.message);
     } finally {
       setBusy(false);
     }
   }
 
   useEffect(() => {
-    if (tab === 'bookings') loadBookings().catch((error) => setStatus(error.message));
+    if (tab === 'bookings') loadBookings().catch((error) => publishNotice('bookings', error.message));
   }, [tab]);
 
   return (
@@ -292,6 +354,9 @@ export default function App() {
               Pickup walk cap: {walk} m
               <input type="range" min="200" max="1000" step="50" value={walk} onChange={(e) => setWalk(e.target.value)} />
             </label>
+            <p className="muted">
+              Depart after and before limit which driver departures can match. A ride appears only when the driver leaves inside this window. It does not set your own pickup time.
+            </p>
             <div className="time-window">
               <label>
                 Depart after
@@ -302,9 +367,13 @@ export default function App() {
                 <input type="datetime-local" value={departBefore} onChange={(e) => setDepartBefore(e.target.value)} />
               </label>
             </div>
+            <label>
+              Seats to book
+              <input type="number" min="1" max="8" value={bookSeats} onChange={(e) => setBookSeats(e.target.value)} />
+            </label>
             <div className="coords">
-              <button type="button" onClick={() => setClickTarget('pickup')}>Pickup {pickup.lat.toFixed(4)}, {pickup.lng.toFixed(4)}</button>
-              <button type="button" onClick={() => setClickTarget('drop')}>Drop {drop.lat.toFixed(4)}, {drop.lng.toFixed(4)}</button>
+              <button type="button" onClick={() => setClickTarget('pickup')}>Pickup · {pickupName}</button>
+              <button type="button" onClick={() => setClickTarget('drop')}>Drop · {dropName}</button>
             </div>
             <button className="primary" disabled={busy} onClick={search}>Search rides</button>
             <ul className="results">
@@ -317,7 +386,9 @@ export default function App() {
                     <span>Walk {match.matchDetails.totalDetourMeters} m · share {match.matchDetails.sharedRideDistanceKm} km</span>
                   </button>
                   {role === 'rider' && (
-                    <button className="book" disabled={busy} onClick={() => book(match)}>Book seat</button>
+                    <button className="book" disabled={busy} onClick={() => book(match)}>
+                      Book {Math.min(Math.max(1, Number(bookSeats) || 1), match.availableSeats)} seat(s)
+                    </button>
                   )}
                 </li>
               ))}
@@ -341,8 +412,8 @@ export default function App() {
               <input type="number" min="1" max="8" value={seats} onChange={(e) => setSeats(e.target.value)} />
             </label>
             <div className="coords">
-              <button type="button" onClick={() => setClickTarget('pickup')}>Origin {origin.lat.toFixed(4)}, {origin.lng.toFixed(4)}</button>
-              <button type="button" onClick={() => setClickTarget('drop')}>Dest {dest.lat.toFixed(4)}, {dest.lng.toFixed(4)}</button>
+              <button type="button" onClick={() => setClickTarget('pickup')}>Origin · {originName}</button>
+              <button type="button" onClick={() => setClickTarget('drop')}>Destination · {destName}</button>
             </div>
             <button disabled={busy} onClick={previewRoute}>Preview path</button>
             <button className="primary" disabled={busy || role !== 'driver'} onClick={publishTrip}>
@@ -358,10 +429,28 @@ export default function App() {
               {bookings.map((booking) => (
                 <li key={booking.id}>
                   <strong>{booking.route_name}</strong>
-                  <span>{booking.driver_name} · {booking.status}</span>
+                  <span>{booking.driver_name} · {booking.status} · {booking.seat_count || 1} seat(s)</span>
                   <span>{fmtTime(booking.departure_at)}</span>
                   {booking.status === 'confirmed' && (
-                    <button className="book" disabled={busy} onClick={() => cancelBooking(booking.id)}>Cancel</button>
+                    <>
+                      <label>
+                        Seats to cancel
+                        <input
+                          type="number"
+                          min="1"
+                          max={booking.seat_count || 1}
+                          value={cancelCounts[booking.id] ?? String(booking.seat_count || 1)}
+                          onChange={(e) => setCancelCounts((prev) => ({ ...prev, [booking.id]: e.target.value }))}
+                        />
+                      </label>
+                      <button
+                        className="book"
+                        disabled={busy}
+                        onClick={() => cancelBooking(booking.id, seatsToRelease(booking, cancelCounts[booking.id]))}
+                      >
+                        Cancel {seatsToRelease(booking, cancelCounts[booking.id])} seat(s)
+                      </button>
+                    </>
                   )}
                 </li>
               ))}
@@ -370,8 +459,8 @@ export default function App() {
           </section>
         )}
 
-        <p className={`status ${status.startsWith('No') || status.includes('failed') || status.includes('error') || status.includes('Error') ? 'warn' : ''}`}>
-          {status}
+        <p className={`status ${notice.text.startsWith('No') || notice.text.includes('failed') || notice.text.includes('error') || notice.text.includes('Error') ? 'warn' : ''}`}>
+          {notice.tab === tab ? notice.text : ''}
         </p>
       </aside>
       <div className="map-wrap">

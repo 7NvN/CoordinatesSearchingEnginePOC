@@ -5,6 +5,7 @@ const cors = require('cors');
 const { assertLngLat, clampWalkMeters, toIsoOrNull } = require('./coords');
 const { findMatchingRides } = require('./matcher');
 const { getRouteLineString, checkOsrmHealth } = require('./osrm');
+const { reversePlace } = require('./places');
 const dbApi = require('./db');
 
 const hits = new Map();
@@ -54,6 +55,16 @@ async function createApp(options = {}) {
       db: 'sqlite',
       osrm,
     });
+  });
+
+  app.get('/v1/places/reverse', async (req, res, next) => {
+    try {
+      const point = assertLngLat({ lng: Number(req.query.lng), lat: Number(req.query.lat) }, 'place');
+      const place = await reversePlace(point[0], point[1]);
+      res.json({ place });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get('/v1/users', (_req, res) => {
@@ -212,6 +223,12 @@ async function createApp(options = {}) {
       const pickup = assertLngLat(req.body?.pickup, 'pickup');
       const drop = assertLngLat(req.body?.drop, 'drop');
       const riderId = req.body?.riderId || 'u_rider';
+      const seats = req.body?.seats == null ? 1 : Number(req.body.seats);
+      if (!Number.isInteger(seats) || seats < 1 || seats > trip.seatsLeft) {
+        const error = new Error('seats must be a whole number no higher than the seats left');
+        error.statusCode = 400;
+        throw error;
+      }
       const maxWalkMeters = clampWalkMeters(req.body?.maxWalkMeters);
       const result = findMatchingRides(
         [{
@@ -236,6 +253,7 @@ async function createApp(options = {}) {
       const booking = dbApi.createBooking(db, {
         tripId: trip.id,
         riderId,
+        seats,
         pickup,
         drop,
         walkPickupM: match.matchDetails.pickupWalkDistanceMeters,
@@ -247,6 +265,7 @@ async function createApp(options = {}) {
           tripId: booking.trip_id,
           riderId: booking.rider_id,
           status: booking.status,
+          seats: booking.seat_count,
           walkPickupM: booking.walk_pickup_m,
           walkDropM: booking.walk_drop_m,
         },
@@ -260,13 +279,15 @@ async function createApp(options = {}) {
 
   app.post('/v1/bookings/:id/cancel', (req, res, next) => {
     try {
-      const booking = dbApi.cancelBooking(db, req.params.id);
+      const seats = req.body?.seats == null ? undefined : Number(req.body.seats);
+      const booking = dbApi.cancelBooking(db, req.params.id, seats);
       return res.json({
         booking: {
           id: booking.id,
           tripId: booking.trip_id,
           riderId: booking.rider_id,
           status: booking.status,
+          seats: booking.seat_count,
         },
         trip: dbApi.getTrip(db, booking.trip_id),
       });

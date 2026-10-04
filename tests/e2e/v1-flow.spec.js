@@ -7,12 +7,13 @@ test('rider can search, book, view, and cancel a seeded trip', async ({ page }) 
   await expect(page.getByText(/Found \d+ ride/)).toBeVisible();
   await expect(page.getByText('Divyasree Orion to Gachibowli')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Book seat' }).first().click();
+  await page.getByRole('button', { name: /Book \d+ seat/ }).first().click();
   await page.getByRole('button', { name: 'Bookings' }).click();
 
   await expect(page.getByText('Divyasree Orion to Gachibowli')).toBeVisible();
   await expect(page.getByText(/confirmed/i)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Cancel' }).click();
-  await expect(page.getByText(/cancelled/i)).toBeVisible();
+  await page.getByRole('button', { name: /Cancel \d+ seat/ }).click();
+  await expect(page.getByText(/Booking cancelled/i)).toBeVisible();
+  await expect(page.getByText(/Found \d+ ride/)).toHaveCount(0);
 });

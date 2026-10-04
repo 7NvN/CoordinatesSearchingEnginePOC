@@ -102,17 +102,29 @@ test('publish obtains geometry from the route provider', async () => {
   assert.deepEqual(result.body.trip.geometry.coordinates[0], [PICKUP.lng, PICKUP.lat]);
 });
 
-test('booking is unique per rider and cancellation restores the seat', async () => {
+test('one rider can add seats and cancel some or all of them', async () => {
   const booking = await request(app)
     .post('/v1/trips/DEMO_ORION_GACHIBOWLI/bookings')
-    .send({ pickup: PICKUP, drop: DROP, riderId: 'u_rider', maxWalkMeters: 500 })
+    .send({ pickup: PICKUP, drop: DROP, riderId: 'u_rider', maxWalkMeters: 500, seats: 1 })
     .expect(201);
   assert.equal(booking.body.trip.seatsLeft, 2);
+  assert.equal(booking.body.booking.seats, 1);
 
-  await request(app)
+  const added = await request(app)
     .post('/v1/trips/DEMO_ORION_GACHIBOWLI/bookings')
-    .send({ pickup: PICKUP, drop: DROP, riderId: 'u_rider', maxWalkMeters: 500 })
-    .expect(409);
+    .send({ pickup: PICKUP, drop: DROP, riderId: 'u_rider', maxWalkMeters: 500, seats: 1 })
+    .expect(201);
+  assert.equal(added.body.booking.id, booking.body.booking.id);
+  assert.equal(added.body.booking.seats, 2);
+  assert.equal(added.body.trip.seatsLeft, 1);
+
+  const partial = await request(app)
+    .post(`/v1/bookings/${booking.body.booking.id}/cancel`)
+    .send({ seats: 1 })
+    .expect(200);
+  assert.equal(partial.body.booking.status, 'confirmed');
+  assert.equal(partial.body.booking.seats, 1);
+  assert.equal(partial.body.trip.seatsLeft, 2);
 
   const cancelled = await request(app)
     .post(`/v1/bookings/${booking.body.booking.id}/cancel`)

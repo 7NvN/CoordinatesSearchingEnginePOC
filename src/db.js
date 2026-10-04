@@ -59,9 +59,14 @@ function openDb(dbPath) {
       walk_pickup_m INTEGER,
       walk_drop_m INTEGER,
       status TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      seat_count INTEGER NOT NULL DEFAULT 1
     );
   `);
+  const bookingColumns = db.prepare('PRAGMA table_info(bookings)').all();
+  if (!bookingColumns.some((column) => column.name === 'seat_count')) {
+    db.exec('ALTER TABLE bookings ADD COLUMN seat_count INTEGER NOT NULL DEFAULT 1');
+  }
   return db;
 }
 
@@ -226,37 +231,60 @@ function createTrip(db, payload) {
 }
 
 function createBooking(db, payload) {
-  const bookingId = crypto.randomUUID();
+  const seats = Number(payload.seats ?? 1);
+  if (!Number.isInteger(seats) || seats < 1) {
+    const error = new Error('seats must be a whole number of at least 1');
+    error.statusCode = 400;
+    throw error;
+  }
   const createdAt = new Date().toISOString();
+  let bookingId;
   const tx = db.transaction(() => {
     const existing = db.prepare(`
       SELECT id FROM bookings
       WHERE trip_id = ? AND rider_id = ? AND status = 'confirmed'
     `).get(payload.tripId, payload.riderId);
-    if (existing) {
-      const error = new Error('Rider already has a confirmed booking on this trip');
-      error.statusCode = 409;
-      throw error;
-    }
 
     const updated = db.prepare(`
       UPDATE trips
-      SET seats_left = seats_left - 1,
-          status = CASE WHEN seats_left - 1 <= 0 THEN 'full' ELSE status END
-      WHERE id = ? AND seats_left > 0 AND status = 'published'
-    `).run(payload.tripId);
+      SET seats_left = seats_left - ?,
+          status = CASE WHEN seats_left - ? <= 0 THEN 'full' ELSE status END
+      WHERE id = ? AND seats_left >= ? AND status = 'published'
+    `).run(seats, seats, payload.tripId, seats);
 
     if (updated.changes === 0) {
-      const error = new Error('No seats left on this trip');
+      const error = new Error('Not enough seats left on this trip');
       error.statusCode = 409;
       throw error;
     }
 
+    if (existing) {
+      bookingId = existing.id;
+      db.prepare(`
+        UPDATE bookings
+        SET seat_count = seat_count + ?,
+            pickup_lng = ?, pickup_lat = ?, drop_lng = ?, drop_lat = ?,
+            walk_pickup_m = ?, walk_drop_m = ?
+        WHERE id = ?
+      `).run(
+        seats,
+        payload.pickup[0],
+        payload.pickup[1],
+        payload.drop[0],
+        payload.drop[1],
+        payload.walkPickupM ?? null,
+        payload.walkDropM ?? null,
+        bookingId
+      );
+      return;
+    }
+
+    bookingId = crypto.randomUUID();
     db.prepare(`
       INSERT INTO bookings (
         id, trip_id, rider_id, pickup_lng, pickup_lat, drop_lng, drop_lat,
-        walk_pickup_m, walk_drop_m, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)
+        walk_pickup_m, walk_drop_m, status, created_at, seat_count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)
     `).run(
       bookingId,
       payload.tripId,
@@ -267,14 +295,15 @@ function createBooking(db, payload) {
       payload.drop[1],
       payload.walkPickupM ?? null,
       payload.walkDropM ?? null,
-      createdAt
+      createdAt,
+      seats
     );
   });
   tx();
   return db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
 }
 
-function cancelBooking(db, bookingId) {
+function cancelBooking(db, bookingId, seatsToCancel) {
   const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
   if (!booking) {
     const error = new Error('Booking not found');
@@ -285,14 +314,26 @@ function cancelBooking(db, bookingId) {
     return booking;
   }
 
+  const held = Number(booking.seat_count || 1);
+  const release = seatsToCancel == null ? held : Number(seatsToCancel);
+  if (!Number.isInteger(release) || release < 1 || release > held) {
+    const error = new Error(`Cancel between 1 and ${held} seat(s)`);
+    error.statusCode = 400;
+    throw error;
+  }
+
   const tx = db.transaction(() => {
-    db.prepare(`UPDATE bookings SET status = 'cancelled' WHERE id = ?`).run(bookingId);
+    if (release === held) {
+      db.prepare(`UPDATE bookings SET status = 'cancelled' WHERE id = ?`).run(bookingId);
+    } else {
+      db.prepare(`UPDATE bookings SET seat_count = seat_count - ? WHERE id = ?`).run(release, bookingId);
+    }
     db.prepare(`
       UPDATE trips
-      SET seats_left = seats_left + 1,
+      SET seats_left = seats_left + ?,
           status = CASE WHEN status = 'full' THEN 'published' ELSE status END
       WHERE id = ?
-    `).run(booking.trip_id);
+    `).run(release, booking.trip_id);
   });
   tx();
   return db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
